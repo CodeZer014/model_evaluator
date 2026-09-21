@@ -1,12 +1,16 @@
 # Core (required for scikit-learn/.joblib/.pkl models -- covers this project's sned_model_v*.joblib)
-joblib
-numpy
-pandas
-scikit-learn
-matplotlib
+# Pinned to match the environment the .joblib files in this project were trained with --
+# scikit-learn pickles are NOT guaranteed compatible across scikit-learn versions
+# (internal modules like `_loss` can move/rename), so an unpinned install can break
+# unpickling even though the code itself hasn't changed.
+joblib==1.5.3
+numpy==2.4.6
+pandas==3.0.3
+scikit-learn==1.8.0
+matplotlib==3.10.9
 
 # Web upload UI (evaluate_app.py)
-streamlit
+streamlit==1.64.0
 
 # Optional, only needed if you evaluate these model formats:
 # tensorflow      # .h5 / .keras / .tflite

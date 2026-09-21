@@ -204,6 +204,20 @@ def load_model(path, model_key: str | None = None, extra_sys_paths: list | None 
         try:
             obj = joblib.load(path)
         except ModuleNotFoundError as e:
+            missing = e.name or ""
+            search_dirs = [str(path.parent.resolve())] + list(extra_sys_paths or [])
+            looks_like_project_file = any(
+                (Path(d) / f"{missing.split('.')[0]}.py").exists() for d in search_dirs
+            )
+            if missing.startswith("_") or not looks_like_project_file:
+                raise ModuleNotFoundError(
+                    f"{e}. '{missing}' looks like an internal library module (e.g. "
+                    "scikit-learn's own private submodules), not project code — this "
+                    "usually means the model was trained with a different "
+                    "scikit-learn/joblib version than what's installed here. Pin "
+                    "scikit-learn (and joblib/numpy) in requirements.txt to match the "
+                    "versions used when the model was saved."
+                ) from e
             raise ModuleNotFoundError(
                 f"{e}. This pickle references a custom Python module that isn't "
                 "importable. It's usually the .py file sitting next to the model "
