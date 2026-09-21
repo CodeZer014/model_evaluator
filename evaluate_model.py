@@ -113,13 +113,19 @@ def main():
     print("=" * 70)
     print("RESULTS")
     print("=" * 70)
-    for k, v in result.metrics.items():
-        print(f"  {k:<22}: {v:.4f}" if isinstance(v, float) else f"  {k:<22}: {v}")
+    for k, v in core.format_metrics_for_display(result.metrics).items():
+        print(f"  {k:<22}: {v}")
+    print("-" * 70)
+    print(f"  VERDICT: {result.verdict_label} (score {result.verdict_score * 100:.1f}%)")
+    print(f"    {result.verdict_blurb}")
     if result.warnings:
         print("\nWarnings:")
         for w in result.warnings:
             print(f"  - {w}")
     print("=" * 70)
+    print()
+    print("False positives / false negatives by class:")
+    print(core.format_error_table_for_display(result.error_table).to_string(index=False))
     print(f"Full report : {report_path.resolve()}")
     print(f"Raw metrics : {(out_dir / 'metrics.json').resolve()}")
     print(f"Misclassified rows: {(out_dir / 'misclassified_examples.csv').resolve()}")

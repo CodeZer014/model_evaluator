@@ -124,21 +124,33 @@ if st.session_state.get("result") is not None:
         for w in result.warnings:
             st.warning(w)
 
+    _VERDICT_ICON = {"Excellent": "🟢", "Great": "🟢", "Good": "🔵", "Fair": "🟠", "Poor": "🔴"}
+    _VERDICT_ST_FN = {
+        "Excellent": st.success, "Great": st.success, "Good": st.info,
+        "Fair": st.warning, "Poor": st.error,
+    }
+    verdict_fn = _VERDICT_ST_FN.get(result.verdict_label, st.info)
+    verdict_fn(
+        f"**{_VERDICT_ICON.get(result.verdict_label, '')} {result.verdict_label}** "
+        f"(score {result.verdict_score * 100:.1f}%) — {result.verdict_blurb}"
+    )
+
     m = result.metrics
+    disp = core.format_metrics_for_display(m)
     metric_cols = st.columns(4)
-    metric_cols[0].metric("Accuracy", f"{m['accuracy']:.3f}")
-    metric_cols[1].metric("Balanced Accuracy", f"{m['balanced_accuracy']:.3f}")
-    metric_cols[2].metric("F1 (macro)", f"{m['f1_macro']:.3f}")
-    metric_cols[3].metric("F1 (weighted)", f"{m['f1_weighted']:.3f}")
+    metric_cols[0].metric("Accuracy", disp["accuracy"])
+    metric_cols[1].metric("Balanced Accuracy", disp["balanced_accuracy"])
+    metric_cols[2].metric("F1 (macro)", disp["f1_macro"])
+    metric_cols[3].metric("F1 (weighted)", disp["f1_weighted"])
 
     metric_cols2 = st.columns(4)
-    metric_cols2[0].metric("Precision (macro)", f"{m['precision_macro']:.3f}")
-    metric_cols2[1].metric("Recall (macro)", f"{m['recall_macro']:.3f}")
+    metric_cols2[0].metric("Precision (macro)", disp["precision_macro"])
+    metric_cols2[1].metric("Recall (macro)", disp["recall_macro"])
     if "roc_auc" in m:
-        metric_cols2[2].metric("ROC AUC", f"{m['roc_auc']:.3f}")
+        metric_cols2[2].metric("ROC AUC", disp["roc_auc"])
     elif "roc_auc_macro" in m:
-        metric_cols2[2].metric("ROC AUC (macro)", f"{m['roc_auc_macro']:.3f}")
-    metric_cols2[3].metric("Latency / row (ms)", f"{m['latency_ms_per_row']:.3f}")
+        metric_cols2[2].metric("ROC AUC (macro)", disp["roc_auc_macro"])
+    metric_cols2[3].metric("Latency / row", disp["latency_ms_per_row"])
 
     st.subheader("Confusion Matrix")
     st.pyplot(result.confusion_matrix_fig, use_container_width=False)
@@ -154,7 +166,11 @@ if st.session_state.get("result") is not None:
                 st.pyplot(result.pr_fig, use_container_width=False)
 
     st.subheader("Per-Class Report")
-    st.dataframe(result.classification_report_df.round(3), use_container_width=True)
+    st.dataframe(core.format_report_df_for_display(result.classification_report_df), use_container_width=True)
+
+    st.subheader("False Positives / False Negatives by Class")
+    st.caption("TP/FP/FN/TN computed one-vs-rest per class from the confusion matrix.")
+    st.dataframe(core.format_error_table_for_display(result.error_table), use_container_width=True)
 
     st.subheader(f"Misclassified Examples (top {len(result.misclassified_df)})")
     if len(result.misclassified_df):

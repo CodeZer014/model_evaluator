@@ -315,6 +315,103 @@ def guess_feature_columns(df: pd.DataFrame, label_col: str, meta: dict | None = 
 
 
 # --------------------------------------------------------------------------
+# Display formatting: percentages + a plain-language verdict
+# --------------------------------------------------------------------------
+
+# Metrics that are fractions in [0, 1] and read better as a percentage.
+PERCENT_METRIC_KEYS = {
+    "accuracy", "balanced_accuracy", "precision_macro", "recall_macro", "f1_macro",
+    "precision_weighted", "recall_weighted", "f1_weighted", "roc_auc",
+    "average_precision", "roc_auc_macro", "roc_auc_weighted",
+}
+
+
+def format_metrics_for_display(metrics: dict) -> dict:
+    """Same keys, human-readable values ('97.30%' instead of 0.973)."""
+    out = {}
+    for k, v in metrics.items():
+        if k in PERCENT_METRIC_KEYS and isinstance(v, (int, float)):
+            out[k] = f"{v * 100:.2f}%"
+        elif k == "latency_ms_per_row" and isinstance(v, (int, float)):
+            out[k] = f"{v:.3f} ms"
+        elif isinstance(v, float):
+            out[k] = f"{v:.4f}"
+        else:
+            out[k] = v
+    return out
+
+
+VERDICT_TIERS = [
+    (0.95, "Excellent", "Performs at a very high level across nearly all classes."),
+    (0.90, "Great", "Strong, reliable performance with only minor weak spots."),
+    (0.80, "Good", "Solid overall, but check the per-class breakdown for weaker classes."),
+    (0.65, "Fair", "Usable but inconsistent — several classes are noticeably weaker than others."),
+    (0.0, "Poor", "Not performing well enough to trust yet — revisit data, features, or training."),
+]
+
+
+def rate_performance(metrics: dict):
+    """Blends accuracy with macro-F1 (robust to class imbalance) and balanced
+    accuracy into one plain-language verdict: Excellent/Great/Good/Fair/Poor.
+    Returns (label, blurb, score)."""
+    parts = [metrics.get(k) for k in ("accuracy", "balanced_accuracy", "f1_macro")
+             if metrics.get(k) is not None]
+    score = sum(parts) / len(parts) if parts else 0.0
+    for threshold, label, blurb in VERDICT_TIERS:
+        if score >= threshold:
+            return label, blurb, score
+    return "Poor", VERDICT_TIERS[-1][2], score
+
+
+def per_class_error_table(cm, classes) -> pd.DataFrame:
+    """TP/FP/FN/TN per class (one-vs-rest) -- the concrete counts behind the
+    confusion matrix, plus the false positive/negative rates they imply."""
+    cm = np.asarray(cm)
+    total = cm.sum()
+    rows = []
+    for i, c in enumerate(classes):
+        tp = int(cm[i, i])
+        support = int(cm[i, :].sum())
+        fn = support - tp
+        fp = int(cm[:, i].sum()) - tp
+        tn = int(total - tp - fn - fp)
+        precision = tp / (tp + fp) if (tp + fp) else 0.0
+        recall = tp / (tp + fn) if (tp + fn) else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+        fpr = fp / (fp + tn) if (fp + tn) else 0.0
+        fnr = fn / (fn + tp) if (fn + tp) else 0.0
+        rows.append({
+            "class": c, "support": support, "true_positive": tp, "false_positive": fp,
+            "false_negative": fn, "true_negative": tn, "precision": precision,
+            "recall": recall, "f1": f1, "false_positive_rate": fpr, "false_negative_rate": fnr,
+        })
+    return pd.DataFrame(rows)
+
+
+def format_error_table_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    disp = df.copy()
+    for col in ("precision", "recall", "f1", "false_positive_rate", "false_negative_rate"):
+        disp[col] = (disp[col] * 100).map(lambda v: f"{v:.2f}%")
+    disp = disp.rename(columns={
+        "class": "Class", "support": "Support", "true_positive": "TP",
+        "false_positive": "FP", "false_negative": "FN", "true_negative": "TN",
+        "precision": "Precision", "recall": "Recall", "f1": "F1",
+        "false_positive_rate": "False Positive Rate", "false_negative_rate": "False Negative Rate",
+    })
+    return disp
+
+
+def format_report_df_for_display(report_df: pd.DataFrame) -> pd.DataFrame:
+    disp = report_df.drop(index="accuracy", errors="ignore").copy()
+    for col in ("precision", "recall", "f1-score"):
+        if col in disp.columns:
+            disp[col] = (disp[col] * 100).map(lambda v: f"{v:.2f}%")
+    if "support" in disp.columns:
+        disp["support"] = disp["support"].round().astype(int)
+    return disp
+
+
+# --------------------------------------------------------------------------
 # Evaluation
 # --------------------------------------------------------------------------
 
@@ -333,6 +430,10 @@ class EvalResult:
     latency_ms_per_row: float = None
     n_rows: int = 0
     warnings: list = field(default_factory=list)
+    error_table: pd.DataFrame = None
+    verdict_label: str = ""
+    verdict_blurb: str = ""
+    verdict_score: float = 0.0
 
 
 def _fig_confusion_matrix(cm, classes):
@@ -497,11 +598,16 @@ def run_evaluation(wrapper: ModelWrapper, X: pd.DataFrame, y_true, pos_label=Non
             pass
     mis_df = mis_df.head(top_k_misclassified).reset_index(drop=True)
 
+    error_table = per_class_error_table(cm, classes)
+    verdict_label, verdict_blurb, verdict_score = rate_performance(metrics)
+
     return EvalResult(
         y_true=y_true.tolist(), y_pred=y_pred.tolist(), classes=classes, metrics=metrics,
         classification_report_df=report_df, confusion_matrix=cm, confusion_matrix_fig=cm_fig,
         roc_fig=roc_fig, pr_fig=pr_fig, misclassified_df=mis_df,
         latency_ms_per_row=latency_ms_per_row, n_rows=len(y_true), warnings=warn_list,
+        error_table=error_table, verdict_label=verdict_label, verdict_blurb=verdict_blurb,
+        verdict_score=verdict_score,
     )
 
 
@@ -516,13 +622,15 @@ def _fig_to_base64(fig) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+_VERDICT_COLORS = {
+    "Excellent": "#1b7a3d", "Great": "#2e8b57", "Good": "#1f6fb2",
+    "Fair": "#b8860b", "Poor": "#b23b3b",
+}
+
+
 def render_html_report(result: EvalResult, model_path: str, data_path: str) -> str:
-    m = result.metrics
-    rows = "".join(
-        f"<tr><td>{k}</td><td>{v:.4f}</td></tr>" if isinstance(v, float) else
-        f"<tr><td>{k}</td><td>{v}</td></tr>"
-        for k, v in m.items()
-    )
+    m = format_metrics_for_display(result.metrics)
+    rows = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in m.items())
     cm_img = _fig_to_base64(result.confusion_matrix_fig)
     roc_html = ""
     if result.roc_fig is not None:
@@ -535,7 +643,17 @@ def render_html_report(result: EvalResult, model_path: str, data_path: str) -> s
         items = "".join(f"<li>{w}</li>" for w in result.warnings)
         warn_html = f'<div class="warn"><b>Warnings</b><ul>{items}</ul></div>'
 
-    report_table = result.classification_report_df.round(3).to_html(classes="tbl")
+    verdict_color = _VERDICT_COLORS.get(result.verdict_label, "#444")
+    verdict_html = (
+        f'<div class="verdict" style="background:{verdict_color}">'
+        f'<div class="verdict-label">{result.verdict_label}</div>'
+        f'<div class="verdict-blurb">{result.verdict_blurb}</div>'
+        f'</div>'
+    )
+
+    report_table = format_report_df_for_display(result.classification_report_df).to_html(classes="tbl")
+    error_table = format_error_table_for_display(result.error_table).to_html(classes="tbl", index=False) \
+        if result.error_table is not None else ""
     mis_table = result.misclassified_df.round(3).to_html(classes="tbl", index=False) \
         if result.misclassified_df is not None and len(result.misclassified_df) else "<p>None — every row was predicted correctly.</p>"
 
@@ -551,14 +669,19 @@ table.tbl th {{ background:#f0f0f0; }}
 img {{ max-width: 100%; margin: 0.5rem 0 1.5rem 0; border:1px solid #eee; }}
 .warn {{ background:#fff8e1; border:1px solid #ffe082; padding:0.75rem 1rem; border-radius:6px; margin:1rem 0; }}
 .card {{ background:white; border:1px solid #e5e5e5; border-radius:8px; padding:1.25rem 1.5rem; margin-bottom:1.5rem; }}
+.verdict {{ color:white; border-radius:8px; padding:1rem 1.5rem; margin-bottom:1.5rem; }}
+.verdict-label {{ font-size:1.6rem; font-weight:700; }}
+.verdict-blurb {{ opacity:0.9; margin-top:0.25rem; }}
 </style></head>
 <body>
 <h1>Model Evaluation Report</h1>
 <p class="meta">Model: <code>{model_path}</code> &nbsp;|&nbsp; Data: <code>{data_path}</code> &nbsp;|&nbsp; Rows evaluated: {result.n_rows}</p>
 {warn_html}
+{verdict_html}
 <div class="card"><h2>Summary Metrics</h2><table class="tbl">{rows}</table></div>
 <div class="card"><h2>Confusion Matrix</h2><img src="data:image/png;base64,{cm_img}"/></div>
 <div class="card">{roc_html}</div>
 <div class="card"><h2>Per-Class Report</h2>{report_table}</div>
+<div class="card"><h2>False Positives / False Negatives by Class</h2>{error_table}</div>
 <div class="card"><h2>Misclassified Examples (top {len(result.misclassified_df) if result.misclassified_df is not None else 0})</h2>{mis_table}</div>
 </body></html>"""
