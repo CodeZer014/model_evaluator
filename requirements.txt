@@ -1,0 +1,14 @@
+# Core (required for scikit-learn/.joblib/.pkl models -- covers this project's sned_model_v*.joblib)
+joblib
+numpy
+pandas
+scikit-learn
+matplotlib
+
+# Web upload UI (evaluate_app.py)
+streamlit
+
+# Optional, only needed if you evaluate these model formats:
+# tensorflow      # .h5 / .keras / .tflite
+# torch           # .pt / .pth (full pickled model, not a bare state_dict)
+# onnxruntime     # .onnx
