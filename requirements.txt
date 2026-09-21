@@ -9,6 +9,11 @@ pandas==3.0.3
 scikit-learn==1.8.0
 matplotlib==3.10.9
 
+# Needed to LOAD a model that was converted with make_standalone.py (its pickle
+# calls back into cloudpickle's own reconstruction helpers) -- not needed for
+# a plain, not-yet-converted .joblib/.pkl file.
+cloudpickle==3.1.2
+
 # Web upload UI (evaluate_app.py)
 streamlit==1.64.0
 

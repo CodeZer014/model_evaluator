@@ -68,3 +68,38 @@ Run `python evaluate_model.py --help` for the full list.
   (`torch.save(model, path)`), not a bare `state_dict` — a state_dict has no
   architecture attached, so there's nothing to reconstruct it from
   automatically.
+
+## Skipping the supporting .py files (v1/v2/v3 models, or any custom pipeline)
+
+This project's models (`sned_model.joblib`, `sned_model_v2.joblib`,
+`sned_model_v3.joblib`) build their pipeline with a `FunctionTransformer`
+wrapping a project-specific function (`add_derived` in `features.py` /
+`v2_features.py` / `v3_features.py`). A plain pickle only stores *a reference*
+to that function ("look up `add_derived` in module `v3_features`"), so
+whatever unpickles it needs that module importable — which is why the app
+asks for those `.py` files.
+
+`make_standalone.py` fixes this once, permanently, per model: it re-saves the
+model with `cloudpickle`, which bakes the function's actual code into the
+file instead of a reference. Run it once, from inside the folder that already
+has the `.py` files (so it can load the model normally the first time):
+
+```bash
+cd ../v3
+python ../model_evaluator/make_standalone.py sned_model_v3.joblib sned_model_v3_standalone.joblib
+```
+
+(Same pattern for v1: `cd ../v1 && python ../model_evaluator/make_standalone.py sned_model.joblib sned_model_v1_standalone.joblib`,
+and v2: `cd ../v2 && python ../model_evaluator/make_standalone.py sned_model_v2.joblib sned_model_v2_standalone.joblib`.)
+
+From then on, upload only `sned_model_v3_standalone.joblib` (or v1/v2's) plus
+the CSV — no supporting `.py` files needed, on this machine or anyone else's,
+since the model no longer depends on where it was trained. This only requires
+`cloudpickle` to be installed wherever the *converted* file is loaded
+(already in `requirements.txt`); it's not needed for a plain, unconverted
+`.joblib`/`.pkl` file.
+
+Note `sned_model.joblib` (v1) is a dict with **two** estimators
+(`focus_area` and `support_level`) — the tool picks `focus_area` by default;
+pass `--model-key support_level` (CLI) or fill in the "Model key" field (app)
+to evaluate the other one instead.
