@@ -12,6 +12,7 @@ per-class report, and misclassified examples -- with a one-click HTML report
 download.
 """
 import json
+import sys
 import tempfile
 from pathlib import Path
 
@@ -46,6 +47,20 @@ if "wrapper" not in st.session_state:
     st.session_state.wrapper = None
     st.session_state.meta = None
     st.session_state.model_sig = None
+    # Every custom module name ever uploaded in this running app process, so a
+    # later attempt that omits a supporting file can't silently succeed by
+    # reusing another attempt's cached import (Python caches modules by name
+    # in sys.modules for the life of the process, regardless of which upload
+    # they came from) -- see the note by _evict_uploaded_modules below.
+    st.session_state.ever_uploaded_module_names = set()
+
+def _evict_uploaded_modules(names):
+    """Force a fresh import from this attempt's files instead of silently
+    reusing whatever an earlier upload in this session happened to leave in
+    sys.modules -- otherwise a model missing its supporting code can appear
+    to work here and then fail the moment the app process restarts."""
+    for name in names:
+        sys.modules.pop(name, None)
 
 if model_file is not None:
     sig = (model_file.name, model_file.size, tuple(f.name for f in (support_files or [])))
@@ -53,8 +68,11 @@ if model_file is not None:
         work_dir = Path(tempfile.mkdtemp(prefix="model_eval_"))
         tmp_path = work_dir / model_file.name
         tmp_path.write_bytes(model_file.getbuffer())
+        current_module_names = {Path(f.name).stem for f in (support_files or [])}
         for f in support_files or []:
             (work_dir / f.name).write_bytes(f.getbuffer())
+        _evict_uploaded_modules(st.session_state.ever_uploaded_module_names | current_module_names)
+        st.session_state.ever_uploaded_module_names |= current_module_names
         try:
             wrapper, meta = core.load_model(tmp_path, model_key=model_key or None)
             st.session_state.wrapper = wrapper

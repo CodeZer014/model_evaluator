@@ -205,11 +205,14 @@ def load_model(path, model_key: str | None = None, extra_sys_paths: list | None 
             obj = joblib.load(path)
         except ModuleNotFoundError as e:
             missing = e.name or ""
-            search_dirs = [str(path.parent.resolve())] + list(extra_sys_paths or [])
-            looks_like_project_file = any(
-                (Path(d) / f"{missing.split('.')[0]}.py").exists() for d in search_dirs
-            )
-            if missing.startswith("_") or not looks_like_project_file:
+            # Leading underscore is Python's own convention for a library's
+            # private internal modules (e.g. sklearn's `_loss`); this project's
+            # modules never do that (v3_features, v3_config, ...), so it's a
+            # reliable signal for "library version mismatch" vs. "you forgot
+            # to include this file" -- unlike checking whether a same-named
+            # .py happens to sit nearby, which is also true right after that
+            # file legitimately goes missing from this attempt's upload.
+            if missing.split(".")[-1].startswith("_"):
                 raise ModuleNotFoundError(
                     f"{e}. '{missing}' looks like an internal library module (e.g. "
                     "scikit-learn's own private submodules), not project code — this "
